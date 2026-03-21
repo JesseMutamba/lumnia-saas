@@ -293,74 +293,150 @@ async function parseFile(file) {
   return null;
 }
 
+// Find the column whose VALUES are mostly years (handles any column name)
+function findYearColumnByValues(headers, rows) {
+  for (const h of headers) {
+    const vals = rows.map(r => String(r[h] ?? "").trim()).filter(Boolean);
+    const yearCount = vals.filter(v => isYear(v)).length;
+    if (yearCount >= Math.min(2, vals.length) && yearCount / vals.length >= 0.5) return h;
+  }
+  return null;
+}
+
+// Extract years embedded in column headers: "Revenue_2025", "2025 CPO", "FY2026", etc.
+function extractEmbeddedYears(headers) {
+  const map = {}; // year → [colName]
+  headers.forEach(h => {
+    const m = h.match(/\b(20[2-9]\d)\b/);
+    if (m) {
+      const y = m[1];
+      if (!map[y]) map[y] = [];
+      map[y].push(h);
+    }
+  });
+  return map; // e.g. { "2025": ["Revenue_2025", "OPEX_2025"], "2026": [...] }
+}
+
+// Generic value extractor
+function toNum(v) {
+  if (typeof v === "number") return v;
+  return parseFloat(String(v).replace(/[^0-9.-]/g, "")) || 0;
+}
+
 // Detect format and extract year→field→value mapping
 function detectAndExtract(headers, rows) {
-  const lowerHeaders = headers.map(h => h.toLowerCase().trim());
+  // ── 1. Transposed: years are column headers ──────────────────────────────
+  const yearHeaderCols = headers.filter(h => isYear(String(h).trim()));
+  if (yearHeaderCols.length >= 1) {
+    const labelCol = headers.find(h => !isYear(String(h).trim())) || headers[0];
+    const result = {};
+    const unmapped = [];
+    rows.forEach(row => {
+      const metric = String(row[labelCol] ?? "").trim();
+      if (!metric) return;
+      const field = bestFieldMatch(metric);
+      if (!field) { if (metric) unmapped.push(metric); return; }
+      yearHeaderCols.forEach(y => {
+        const year = String(y).trim();
+        if (!result[year]) result[year] = {};
+        if (!result[year][field]) result[year][field] = toNum(row[y]);
+      });
+    });
+    const years = yearHeaderCols.map(y => String(y).trim()).sort();
+    if (Object.keys(result).length > 0) return { format: "transposed", data: result, years, unmapped };
+  }
 
-  // ── Long format: has "year", "metric"/"field", "value" columns ──
-  const yearCol   = headers.find(h => /^year$/i.test(h.trim()));
-  const metricCol = headers.find(h => /metric|field|indicator|libelle|poste/i.test(h.trim()));
-  const valueCol  = headers.find(h => /^value$|^montant$|^amount$|^valeur$/i.test(h.trim()));
+  // ── 2. Long format: metric + value columns, year anywhere ────────────────
+  const metricCol = headers.find(h => /metric|field|indicator|libelle|poste|description|name|category/i.test(h.trim()));
+  const valueCol  = headers.find(h => /^value$|^montant$|^amount$|^valeur$|^total$|^data$/i.test(h.trim()));
+  // Year col = any col whose values look like years (any name)
+  const yearColLong = findYearColumnByValues(headers, rows);
 
-  if (yearCol && metricCol && valueCol) {
+  if (metricCol && valueCol && yearColLong) {
     const result = {};
     rows.forEach(row => {
-      const year = String(row[yearCol]).trim();
-      const metric = String(row[metricCol]).trim();
-      const value = typeof row[valueCol] === "number" ? row[valueCol] : parseFloat(String(row[valueCol]).replace(/[^0-9.-]/g, "")) || 0;
+      const year = String(row[yearColLong] ?? "").trim();
+      const metric = String(row[metricCol] ?? "").trim();
+      const value = toNum(row[valueCol]);
       const field = bestFieldMatch(metric);
       if (field && isYear(year)) {
         if (!result[year]) result[year] = {};
-        result[year][field] = value;
+        if (!result[year][field]) result[year][field] = value;
       }
     });
     const years = [...new Set(Object.keys(result))].sort();
-    return { format: "long", data: result, years, unmapped: [] };
+    if (years.length > 0) return { format: "long", data: result, years, unmapped: [] };
   }
 
-  // ── Wide format: year is a column, other columns are metrics ──
-  const yearColWide = headers.find(h => /^year$|^annee$|^année$/i.test(h.trim()));
+  // ── 3. Wide format: one column has year values, rest are metrics ─────────
+  const yearColWide = yearColLong || findYearColumnByValues(headers, rows) ||
+    headers.find(h => /^year$|^yr$|^fy$|^annee$|^année$|^periode$|^period$|^fiscal|^exercice$/i.test(h.trim()));
   if (yearColWide) {
     const metricCols = headers.filter(h => h !== yearColWide);
-    const mappings = {};
-    const unmapped = [];
+    const mappings = {}, unmapped = [];
     metricCols.forEach(col => {
       const field = bestFieldMatch(col);
       if (field) mappings[col] = field;
       else unmapped.push(col);
     });
-    const result = {};
-    const years = [];
+    const result = {}, years = [];
     rows.forEach(row => {
-      const year = String(row[yearColWide]).trim();
+      const year = String(row[yearColWide] ?? "").trim();
       if (!isYear(year)) return;
       years.push(year);
-      result[year] = {};
+      if (!result[year]) result[year] = {};
       metricCols.forEach(col => {
         const field = mappings[col];
-        if (field) result[year][field] = typeof row[col] === "number" ? row[col] : parseFloat(String(row[col]).replace(/[^0-9.-]/g, "")) || 0;
+        if (field && !result[year][field]) result[year][field] = toNum(row[col]);
       });
     });
-    return { format: "wide", data: result, years: [...new Set(years)].sort(), unmapped, mappings, metricCols };
+    const uniqueYears = [...new Set(years)].sort();
+    if (uniqueYears.length > 0) return { format: "wide", data: result, years: uniqueYears, unmapped };
   }
 
-  // ── Transposed: years are column headers, rows are metrics ──
-  const yearCols = headers.filter(h => isYear(h.trim()));
-  if (yearCols.length >= 2) {
-    const metricColT = headers[0];
+  // ── 4. Embedded years in column names: "Revenue_2025", "2026_OPEX" ───────
+  const embedded = extractEmbeddedYears(headers);
+  if (Object.keys(embedded).length >= 1) {
     const result = {};
-    const unmapped = [];
+    const labelCol = headers.find(h => !embedded[h] && bestFieldMatch(h)) || headers[0];
     rows.forEach(row => {
-      const metric = String(row[metricColT]).trim();
-      const field = bestFieldMatch(metric);
-      if (!field) { unmapped.push(metric); return; }
-      yearCols.forEach(y => {
-        const year = y.trim();
-        if (!result[year]) result[year] = {};
-        result[year][field] = typeof row[y] === "number" ? row[y] : parseFloat(String(row[y]).replace(/[^0-9.-]/g, "")) || 0;
+      // Each row is one metric, columns per year
+      const metric = String(row[labelCol] ?? "").trim();
+      const field = bestFieldMatch(metric) || bestFieldMatch(labelCol);
+      Object.entries(embedded).forEach(([year, cols]) => {
+        cols.forEach(col => {
+          const colField = bestFieldMatch(col.replace(/\b20[2-9]\d\b/, "").trim()) || field;
+          if (!colField) return;
+          if (!result[year]) result[year] = {};
+          if (!result[year][colField]) result[year][colField] = toNum(row[col]);
+        });
       });
     });
-    return { format: "transposed", data: result, years: yearCols.map(y => y.trim()).sort(), unmapped };
+    const years = Object.keys(embedded).sort();
+    if (Object.keys(result).length > 0) return { format: "embedded", data: result, years, unmapped: [] };
+  }
+
+  // ── 5. Single-row fallback: treat each row as one year if it has a year-like value ─
+  const firstNumericHeader = headers.find(h => {
+    const vals = rows.map(r => toNum(r[h])).filter(v => v > 0);
+    return vals.length > 0;
+  });
+  if (firstNumericHeader) {
+    // Try to find any year-like value in each row and use it
+    const result = {};
+    rows.forEach(row => {
+      // Look for a year value in any cell of this row
+      const yearVal = Object.values(row).map(v => String(v ?? "").trim()).find(v => isYear(v));
+      if (!yearVal) return;
+      headers.forEach(h => {
+        const field = bestFieldMatch(h);
+        if (!field) return;
+        if (!result[yearVal]) result[yearVal] = {};
+        if (!result[yearVal][field]) result[yearVal][field] = toNum(row[h]);
+      });
+    });
+    const years = [...new Set(Object.keys(result))].sort();
+    if (years.length > 0) return { format: "rowscan", data: result, years, unmapped: [] };
   }
 
   return null;
@@ -461,7 +537,7 @@ export default function DataInput() {
     // Single-sheet / CSV: run format detection
     const detected = detectAndExtract(parsed.headers, parsed.rows);
     if (!detected || detected.years.length === 0) {
-      setError("Could not detect a year column. Make sure your file has a Year column or year headers.");
+      setError("Could not find year data in this file. The table below is ready — fill it in manually or try a different file.");
       return;
     }
 
