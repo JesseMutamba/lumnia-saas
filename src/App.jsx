@@ -4,6 +4,7 @@ import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import DataInput from "./pages/DataInput";
 import Dashboard from "./pages/Dashboard";
+import MLDashboard from "./pages/MLDashboard";
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -26,6 +27,7 @@ export default function App() {
           <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
           <Route path="/input" element={<PrivateRoute><DataInput /></PrivateRoute>} />
           <Route path="/dashboard" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
+          <Route path="/ml" element={<PrivateRoute><MLDashboard /></PrivateRoute>} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </BrowserRouter>
