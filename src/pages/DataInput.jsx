@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
 import { supabase } from "../lib/supabase";
@@ -375,6 +375,8 @@ const EMPTY_ROW = () => ({
 export default function DataInput() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const editId = searchParams.get("id");
   const fileInputRef = useRef(null);
 
   const [years, setYears] = useState(["2025","2026","2027","2028","2029","2030"]);
@@ -394,7 +396,10 @@ export default function DataInput() {
   const [pendingYears, setPendingYears] = useState([]);
   const [uploadMsg, setUploadMsg] = useState("");
 
-  useEffect(() => { loadProjects(); }, []);
+  useEffect(() => {
+    loadProjects();
+    if (editId) loadProject(editId);
+  }, [editId]);
 
   async function loadProjects() {
     const { data } = await supabase
@@ -502,11 +507,23 @@ export default function DataInput() {
       DASHBOARD_FIELDS.forEach(({ key }) => { out[key] = parseFloat(row[key]) || 0; });
       return out;
     });
-    const { error } = await supabase.from("financial_projects").insert({
-      user_id: user.id,
-      name: projectName || "My Project",
-      data: parsed,
-    });
+
+    let error;
+    if (editId) {
+      // Update existing project
+      ({ error } = await supabase.from("financial_projects")
+        .update({ name: projectName || "My Project", data: parsed })
+        .eq("id", editId)
+        .eq("user_id", user.id));
+    } else {
+      // Create new project
+      ({ error } = await supabase.from("financial_projects").insert({
+        user_id: user.id,
+        name: projectName || "My Project",
+        data: parsed,
+      }));
+    }
+
     setSaving(false);
     if (error) { setError(error.message); return; }
     setSuccess(true);
@@ -651,7 +668,7 @@ export default function DataInput() {
           <div style={{ marginTop: 24, display: "flex", gap: 12 }}>
             <button type="submit" disabled={saving}
               style={{ background: C.forest, color: "#fff", border: "none", borderRadius: 8, padding: "12px 28px", fontSize: 14, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.7 : 1 }}>
-              {saving ? "Saving..." : "Save & View Dashboard"}
+              {saving ? "Saving..." : editId ? "Update & View Dashboard" : "Save & View Dashboard"}
             </button>
             <button type="button" onClick={() => navigate("/dashboard")}
               style={{ background: "none", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 8, padding: "12px 20px", fontSize: 13, cursor: "pointer" }}>

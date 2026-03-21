@@ -69,9 +69,11 @@ export default function Dashboard() {
     <PVAKDashboard
       baseData={activeProject.data}
       projectName={activeProject.name}
+      projectId={activeProject.id}
       projects={projects}
       onSwitchProject={(p) => setActiveProject(p)}
       onNewProject={() => navigate("/input")}
+      onEditProject={() => navigate(`/input?id=${activeProject.id}`)}
       onSignOut={signOut}
       userEmail={user.email}
     />

@@ -700,7 +700,7 @@ const ProgressRow = ({ item, years }) => {
   );
 };
 
-export default function PVAKDashboard({ baseData, projectName, projects = [], onSwitchProject, onNewProject, onSignOut, userEmail }) {
+export default function PVAKDashboard({ baseData, projectName, projects = [], onSwitchProject, onNewProject, onEditProject, onSignOut, userEmail }) {
   // Make BASE reactive to the user's data, auto-filling derived fields if missing
   const BASE = (baseData || []).map((d, i) => {
     const row = { ...d, year: YEARS[i] };
@@ -714,6 +714,29 @@ export default function PVAKDashboard({ baseData, projectName, projects = [], on
     }
     return row;
   });
+
+  // ── DERIVED KPIs from BASE data ──────────────────────────────────────────────
+  const totalRevenue   = BASE.reduce((s, d) => s + (d.revenue || 0), 0);
+  const totalCapex     = BASE.reduce((s, d) => s + (d.capex   || 0), 0);
+  const totalOpex      = BASE.reduce((s, d) => s + (d.opex    || 0), 0);
+  const totalMargin    = BASE.reduce((s, d) => s + (d.margin  || 0), 0);
+  const lastRow        = BASE[BASE.length - 1] || {};
+  const firstRow       = BASE[0] || {};
+  const secondRow      = BASE[1] || BASE[0] || {};
+  const revenueGrowth  = firstRow.revenue > 0
+    ? Math.round(((lastRow.revenue - firstRow.revenue) / firstRow.revenue) * 100)
+    : 0;
+  const peakHaRow      = BASE.reduce((best, d) => (d.ha || 0) > (best.ha || 0) ? d : best, BASE[0] || {});
+  const finalMarginPct = lastRow.marginPct || (lastRow.revenue > 0 && lastRow.margin > 0 ? Math.round((lastRow.margin / lastRow.revenue) * 100) : 0);
+  const opexPerTCpo2   = secondRow.opexPerTCpo || (secondRow.cpo > 0 ? Math.round(secondRow.opex / secondRow.cpo) : 0);
+  const totalPerTCpo2  = secondRow.totalPerTCpo || 0;
+  const opexPerHa2     = secondRow.opexPerHa   || (secondRow.haMgd > 0 ? Math.round(secondRow.opex / secondRow.haMgd) : 0);
+  const opexPerTLast   = lastRow.opexPerTCpo   || (lastRow.cpo > 0 ? Math.round(lastRow.opex / lastRow.cpo) : 0);
+  const totalPerTLast  = lastRow.totalPerTCpo  || 0;
+  const opexPct2       = secondRow.revenue > 0 ? Math.round((secondRow.opex / secondRow.revenue) * 100) : 0;
+  const totalHaMgd     = lastRow.haMgd || 0;
+  const firstYear      = firstRow.year  || YEARS[0];
+  const lastYear       = lastRow.year   || YEARS[YEARS.length - 1];
 
   const [tab, setTab] = useState("overview");
   const [cview, setCview] = useState("progress");
@@ -749,6 +772,7 @@ export default function PVAKDashboard({ baseData, projectName, projects = [], on
                 {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               </select>
             )}
+            <button onClick={onEditProject} style={{ background: "none", color: C.forest, border: `1px solid ${C.forest}`, borderRadius: 6, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Edit Data</button>
             <button onClick={onNewProject} style={{ background: C.forest, color: "#fff", border: "none", borderRadius: 6, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ New Project</button>
             <span style={{ color: C.muted, fontSize: 11 }}>{userEmail}</span>
             <button onClick={onSignOut} style={{ background: "none", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 11, cursor: "pointer" }}>Sign Out</button>
@@ -769,10 +793,10 @@ export default function PVAKDashboard({ baseData, projectName, projects = [], on
         {tab === "overview" && (
           <div>
             <div style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
-              <KCard label="Revenue Projection 2025–2030" value="$11.68M" sub="2,086% growth from 2025 to 2030" color={C.forest} />
-              <KCard label="Total CAPEX Budget" value="$3.12M" sub="Plantation $2.92M · Usine $0.20M" color={C.gold} />
-              <KCard label="2026 OPEX (actual base)" value="$362K" sub="Salaries + Materials + Admin + DGO" color={C.leaf} />
-              <KCard label="Peak Planting Year" value="2027" sub="1,200 HA · Total 5,525 HA by 2030" color={C.earth} />
+              <KCard label={`Revenue Projection ${firstYear}–${lastYear}`} value={fmt(totalRevenue)} sub={`${revenueGrowth.toLocaleString()}% growth over period`} color={C.forest} />
+              <KCard label="Total CAPEX Budget" value={fmt(totalCapex)} sub={`Total investment ${firstYear}–${lastYear}`} color={C.gold} />
+              <KCard label="Total OPEX" value={fmt(totalOpex)} sub={`Operating costs ${firstYear}–${lastYear}`} color={C.leaf} />
+              <KCard label="Peak Planting Year" value={peakHaRow.year || "—"} sub={`${(peakHaRow.ha || 0).toLocaleString()} HA · ${totalHaMgd.toLocaleString()} HA total by ${lastYear}`} color={C.earth} />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 16, marginBottom: 16 }}>
               <Pnl>
@@ -840,10 +864,10 @@ export default function PVAKDashboard({ baseData, projectName, projects = [], on
         {tab === "costprod" && (
           <div>
             <div style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
-              <KCard label="OPEX Cost / Tonne CPO — 2026" value="$469 / T" sub="2030 target: $191/T (−59% efficiency gain)" color={C.forest} />
-              <KCard label="Total Cost / Tonne CPO — 2026" value="$1,598 / T" sub="vs $216/T at maturity (2030)" color={C.red} />
-              <KCard label="OPEX / Managed Hectare — 2026" value="$229 / HA" sub="Declining to $166/HA by 2030" color={C.gold} />
-              <KCard label="Operating Margin — 2030" value="81%" sub="Revenue far exceeds OPEX at scale" color={C.leaf} />
+              <KCard label={`OPEX / Tonne CPO — ${secondRow.year || ""}`} value={opexPerTCpo2 ? `$${opexPerTCpo2.toLocaleString()} / T` : "—"} sub={opexPerTLast ? `${lastYear} target: $${opexPerTLast.toLocaleString()}/T` : "Enter CPO & OPEX data"} color={C.forest} />
+              <KCard label={`Total Cost / Tonne CPO — ${secondRow.year || ""}`} value={totalPerTCpo2 ? `$${totalPerTCpo2.toLocaleString()} / T` : "—"} sub={totalPerTLast ? `vs $${totalPerTLast.toLocaleString()}/T at maturity (${lastYear})` : "Enter totalPerTCpo data"} color={C.red} />
+              <KCard label={`OPEX / Managed Hectare — ${secondRow.year || ""}`} value={opexPerHa2 ? `$${opexPerHa2.toLocaleString()} / HA` : "—"} sub={`Based on ${(secondRow.haMgd || 0).toLocaleString()} HA managed`} color={C.gold} />
+              <KCard label={`Operating Margin — ${lastYear}`} value={finalMarginPct ? `${finalMarginPct}%` : "—"} sub={totalMargin > 0 ? `Net margin: ${fmt(totalMargin)} over period` : "Enter revenue & OPEX data"} color={C.leaf} />
             </div>
             <Pnl style={{ marginBottom: 16 }}>
               <STitle accent={C.forest} sub="Operating cost per tonne of CPO produced">OPEX per Tonne CPO — Efficiency Curve 2025–2030</STitle>
@@ -902,10 +926,10 @@ export default function PVAKDashboard({ baseData, projectName, projects = [], on
         {tab === "capex" && (
           <div>
             <div style={{ display: "flex", gap: 14, marginBottom: 18, flexWrap: "wrap" }}>
-              <KCard label="Total CAPEX 2025–2030" value="$3.12M" sub="Plantation $2.92M · Usine $0.20M" color={C.gold} />
-              <KCard label="Peak Year" value="2026 — $870K" sub="Seeds + 2ème Usine commissioning" color={C.red} />
-              <KCard label="Plantation Share" value="93.5%" sub="Infrastructure-heavy phase 2025–2029" color={C.forest} />
-              <KCard label="Feb+Mar Peak" value="$325,920" sub="37% of annual 2026 budget in 2 months" color={C.earth} />
+              <KCard label={`Total CAPEX ${firstYear}–${lastYear}`} value={fmt(totalCapex)} sub={`Avg ${fmt(totalCapex / Math.max(BASE.length, 1))} / year`} color={C.gold} />
+              <KCard label="Peak CAPEX Year" value={BASE.reduce((b, d) => (d.capex||0) > (b.capex||0) ? d : b, BASE[0]||{}).year || "—"} sub={fmt(BASE.reduce((b, d) => (d.capex||0) > (b.capex||0) ? d : b, BASE[0]||{}).capex||0)} color={C.red} />
+              <KCard label="CAPEX to Revenue Ratio" value={totalRevenue > 0 ? `${Math.round((totalCapex/totalRevenue)*100)}%` : "—"} sub="Investment intensity over full period" color={C.forest} />
+              <KCard label="Net Position" value={fmt(totalRevenue - totalCapex - totalOpex)} sub="Revenue minus all costs" color={C.earth} />
             </div>
             <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
               {[{ id: "progress", label: "Item Progress" }, { id: "yearly", label: "Year by Year" }, { id: "monthly", label: "Monthly Flow 2026" }].map(v => (
@@ -1005,9 +1029,9 @@ export default function PVAKDashboard({ baseData, projectName, projects = [], on
         {tab === "opex" && (
           <div>
             <div style={{ display: "flex", gap: 14, marginBottom: 18, flexWrap: "wrap" }}>
-              <KCard label="Total OPEX 2026" value="$362K" sub="Base year for 2027–2030 projections" color={C.red} />
-              <KCard label="Salary Burden" value="$182K / yr" sub="3 cost centers · Plantations + Tech + Admin" color={C.gold} />
-              <KCard label="Materials & Consumables" value="$88K / yr" sub="Fuel, spare parts, agro materials" color={C.leaf} />
+              <KCard label={`Total OPEX ${firstYear}–${lastYear}`} value={fmt(totalOpex)} sub={`${fmt(secondRow.opex || 0)} in ${secondRow.year || ""} (base year)`} color={C.red} />
+              <KCard label="Avg Annual OPEX" value={fmt(totalOpex / Math.max(BASE.length, 1))} sub="Mean operating cost per year" color={C.gold} />
+              <KCard label="OPEX Growth" value={firstRow.opex > 0 ? `${Math.round(((lastRow.opex - firstRow.opex) / firstRow.opex) * 100)}%` : "—"} sub={`${firstYear} → ${lastYear}`} color={C.leaf} />
               <KCard label="Fixed Overhead" value="$91K / yr" sub="Admin site $33K + DGO $58K" color={C.earth} />
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
