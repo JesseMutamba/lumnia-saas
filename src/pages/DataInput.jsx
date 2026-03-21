@@ -294,15 +294,6 @@ async function parseFile(file) {
 }
 
 // Find the column whose VALUES are mostly years (handles any column name)
-function findYearColumnByValues(headers, rows) {
-  for (const h of headers) {
-    const vals = rows.map(r => String(r[h] ?? "").trim()).filter(Boolean);
-    const yearCount = vals.filter(v => isYear(v)).length;
-    if (yearCount >= Math.min(2, vals.length) && yearCount / vals.length >= 0.5) return h;
-  }
-  return null;
-}
-
 // Extract years embedded in column headers: "Revenue_2025", "2025 CPO", "FY2026", etc.
 function extractEmbeddedYears(headers) {
   const map = {}; // year → [colName]
