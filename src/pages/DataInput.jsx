@@ -490,6 +490,10 @@ export default function DataInput() {
   const [pendingYears, setPendingYears] = useState([]);
   const [uploadMsg, setUploadMsg] = useState("");
 
+  // Raw dataset (for generic/non-financial files)
+  const [rawDataset, setRawDataset] = useState(null); // { headers, rows }
+  const [dataMode, setDataMode] = useState("financial"); // "financial" | "generic"
+
   useEffect(() => {
     loadProjects();
     if (editId) loadProject(editId);
@@ -535,6 +539,8 @@ export default function DataInput() {
     setError("");
     setUploadMsg("");
     setShowMapper(false);
+    setRawDataset(null);
+    setDataMode("financial");
 
     const parsed = await parseFile(file);
     if (!parsed) { setError("Unsupported file type. Use CSV, XLSX, XLS, or ODS."); return; }
@@ -544,18 +550,29 @@ export default function DataInput() {
     // Multi-sheet Excel: data already extracted and merged
     if (parsed.multiSheet) {
       if (!parsed.years || parsed.years.length === 0) {
-        setError("Could not find year data in any sheet. Make sure your file has columns labeled 2025, 2026, etc.");
+        // Fall through to generic mode below
+      } else {
+        applyData(parsed.data, parsed.years);
+        setUploadMsg(`Imported ${parsed.years.length} years from "${file.name}"${cleanSummary}`);
         return;
       }
-      applyData(parsed.data, parsed.years);
-      setUploadMsg(`Imported ${parsed.years.length} years from "${file.name}"${cleanSummary}`);
-      return;
     }
 
     // Single-sheet / CSV: run format detection
-    const detected = detectAndExtract(parsed.headers, parsed.rows);
+    const headers = parsed.headers || [];
+    const csvRows = parsed.rows || [];
+
+    // Always store raw dataset so we can save as generic if needed
+    if (headers.length > 0 && csvRows.length > 0) {
+      setRawDataset({ headers, rows: csvRows });
+    }
+
+    const detected = !parsed.multiSheet ? detectAndExtract(headers, csvRows) : null;
+
     if (!detected || detected.years.length === 0) {
-      setError("Could not find year data in this file. The table below is ready — fill it in manually or try a different file.");
+      // Generic mode: save raw data as-is
+      setDataMode("generic");
+      setUploadMsg(`"${file.name}" loaded — ${csvRows.length} rows, ${headers.length} columns${cleanSummary}. Will be saved as a generic dataset.`);
       return;
     }
 
@@ -596,25 +613,31 @@ export default function DataInput() {
     e.preventDefault();
     setError("");
     setSaving(true);
-    const parsed = rows.map(row => {
-      const out = {};
-      DASHBOARD_FIELDS.forEach(({ key }) => { out[key] = parseFloat(row[key]) || 0; });
-      return out;
-    });
+
+    let saveData;
+    if (dataMode === "generic" && rawDataset) {
+      // Store raw dataset — DynamicDashboard will visualize it
+      saveData = { type: "generic", headers: rawDataset.headers, rows: rawDataset.rows };
+    } else {
+      // Store as financial projection array (existing format)
+      saveData = rows.map(row => {
+        const out = {};
+        DASHBOARD_FIELDS.forEach(({ key }) => { out[key] = parseFloat(row[key]) || 0; });
+        return out;
+      });
+    }
 
     let error;
     if (editId) {
-      // Update existing project
       ({ error } = await supabase.from("financial_projects")
-        .update({ name: projectName || "My Project", data: parsed })
+        .update({ name: projectName || "My Project", data: saveData })
         .eq("id", editId)
         .eq("user_id", user.id));
     } else {
-      // Create new project
       ({ error } = await supabase.from("financial_projects").insert({
         user_id: user.id,
         name: projectName || "My Project",
-        data: parsed,
+        data: saveData,
       }));
     }
 
@@ -714,6 +737,21 @@ export default function DataInput() {
         )}
 
         {error && <p style={{ color: C.red, fontSize: 12, marginBottom: 16, background: `${C.red}10`, padding: "8px 12px", borderRadius: 6 }}>{error}</p>}
+
+        {dataMode === "generic" && rawDataset && (
+          <div style={{ background: `${C.forest}12`, border: `1px solid ${C.forest}40`, borderRadius: 10, padding: "14px 18px", marginBottom: 24, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+            <div>
+              <p style={{ color: C.forest, fontWeight: 700, fontSize: 13, margin: "0 0 3px" }}>Generic dataset detected</p>
+              <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>
+                {rawDataset.rows.length} rows · {rawDataset.headers.length} columns. Lumina will auto-generate charts for your data.
+              </p>
+            </div>
+            <button type="button" onClick={() => setDataMode("financial")}
+              style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 12px", fontSize: 11, color: C.muted, cursor: "pointer", whiteSpace: "nowrap" }}>
+              Switch to Manual Entry
+            </button>
+          </div>
+        )}
 
         <form onSubmit={handleSave}>
           <div style={{ marginBottom: 20 }}>

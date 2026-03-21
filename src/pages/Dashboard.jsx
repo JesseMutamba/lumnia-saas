@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../context/AuthContext";
 import PVAKDashboard from "../components/PVAKDashboard";
+import DynamicDashboard from "../components/DynamicDashboard";
 
 const C = {
   bg: "#F4F0E6", panel: "#FEFCF8", panel2: "#EDE8DC", border: "#D5CEBC",
@@ -65,17 +66,26 @@ export default function Dashboard() {
     );
   }
 
+  const sharedProps = {
+    projectName: activeProject.name,
+    projects,
+    onSwitchProject: (p) => setActiveProject(p),
+    onNewProject: () => navigate("/input"),
+    onEditProject: () => navigate(`/input?id=${activeProject.id}`),
+    onSignOut: signOut,
+    userEmail: user.email,
+  };
+
+  // Route to the right dashboard based on data type
+  if (activeProject.data?.type === "generic") {
+    return <DynamicDashboard data={activeProject.data} {...sharedProps} />;
+  }
+
   return (
     <PVAKDashboard
       baseData={activeProject.data}
-      projectName={activeProject.name}
       projectId={activeProject.id}
-      projects={projects}
-      onSwitchProject={(p) => setActiveProject(p)}
-      onNewProject={() => navigate("/input")}
-      onEditProject={() => navigate(`/input?id=${activeProject.id}`)}
-      onSignOut={signOut}
-      userEmail={user.email}
+      {...sharedProps}
     />
   );
 }
