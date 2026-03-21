@@ -323,6 +323,26 @@ function toNum(v) {
   return parseFloat(String(v).replace(/[^0-9.-]/g, "")) || 0;
 }
 
+// Extract year from a value — handles plain years AND date strings like "2025-01", "01/2025"
+function extractYear(val) {
+  const s = String(val ?? "").trim();
+  // Plain year
+  if (isYear(s)) return s;
+  // Date strings: 2025-01, 2025/01, 01-2025, Jan-2025, 2025-01-01
+  const m = s.match(/\b(20[2-9]\d)\b/);
+  return m ? m[1] : null;
+}
+
+// Find year column — checks both exact year values and date strings
+function findYearColumnByValues(headers, rows) {
+  for (const h of headers) {
+    const vals = rows.map(r => String(r[h] ?? "").trim()).filter(Boolean);
+    const yearCount = vals.filter(v => extractYear(v) !== null).length;
+    if (yearCount >= Math.min(2, vals.length) && yearCount / vals.length >= 0.5) return h;
+  }
+  return null;
+}
+
 // Detect format and extract year→field→value mapping
 function detectAndExtract(headers, rows) {
   // ── 1. Transposed: years are column headers ──────────────────────────────
@@ -347,30 +367,35 @@ function detectAndExtract(headers, rows) {
   }
 
   // ── 2. Long format: metric + value columns, year anywhere ────────────────
-  const metricCol = headers.find(h => /metric|field|indicator|libelle|poste|description|name|category/i.test(h.trim()));
-  const valueCol  = headers.find(h => /^value$|^montant$|^amount$|^valeur$|^total$|^data$/i.test(h.trim()));
-  // Year col = any col whose values look like years (any name)
+  // Prefer exact/close matches for metric column over broad ones like "category"
+  const metricCol = (
+    headers.find(h => /^metric$|^metrics$|^indicateur$|^indicator$/i.test(h.trim())) ||
+    headers.find(h => /^field$|^libelle$|^poste$|^description$|^item$/i.test(h.trim())) ||
+    headers.find(h => /metric|indicator|libelle|poste|description/i.test(h.trim()))
+  );
+  const valueCol = headers.find(h => /^value$|^montant$|^amount$|^valeur$|^total$|^amount_usd$/i.test(h.trim()));
   const yearColLong = findYearColumnByValues(headers, rows);
 
   if (metricCol && valueCol && yearColLong) {
-    const result = {};
+    // Aggregate by year (handles monthly rows too — sums numeric values per field per year)
+    const result = {}, counts = {};
     rows.forEach(row => {
-      const year = String(row[yearColLong] ?? "").trim();
+      const year = extractYear(row[yearColLong]);
       const metric = String(row[metricCol] ?? "").trim();
       const value = toNum(row[valueCol]);
       const field = bestFieldMatch(metric);
-      if (field && isYear(year)) {
-        if (!result[year]) result[year] = {};
-        if (!result[year][field]) result[year][field] = value;
-      }
+      if (!field || !year) return;
+      if (!result[year]) { result[year] = {}; counts[year] = {}; }
+      result[year][field] = (result[year][field] || 0) + value;
+      counts[year][field] = (counts[year][field] || 0) + 1;
     });
     const years = [...new Set(Object.keys(result))].sort();
     if (years.length > 0) return { format: "long", data: result, years, unmapped: [] };
   }
 
-  // ── 3. Wide format: one column has year values, rest are metrics ─────────
-  const yearColWide = yearColLong || findYearColumnByValues(headers, rows) ||
-    headers.find(h => /^year$|^yr$|^fy$|^annee$|^année$|^periode$|^period$|^fiscal|^exercice$/i.test(h.trim()));
+  // ── 3. Wide format: one column has year/date values, rest are metrics ────
+  const yearColWide = yearColLong ||
+    headers.find(h => /^year$|^yr$|^fy$|^annee$|^année$|^periode$|^period$|^fiscal|^exercice$|^date$|^month$/i.test(h.trim()));
   if (yearColWide) {
     const metricCols = headers.filter(h => h !== yearColWide);
     const mappings = {}, unmapped = [];
@@ -379,18 +404,20 @@ function detectAndExtract(headers, rows) {
       if (field) mappings[col] = field;
       else unmapped.push(col);
     });
-    const result = {}, years = [];
+    // Aggregate rows by year (sums monthly rows into annual)
+    const result = {}, counts = {};
     rows.forEach(row => {
-      const year = String(row[yearColWide] ?? "").trim();
-      if (!isYear(year)) return;
-      years.push(year);
-      if (!result[year]) result[year] = {};
+      const year = extractYear(row[yearColWide]);
+      if (!year) return;
+      if (!result[year]) { result[year] = {}; counts[year] = {}; }
       metricCols.forEach(col => {
         const field = mappings[col];
-        if (field && !result[year][field]) result[year][field] = toNum(row[col]);
+        if (!field) return;
+        result[year][field] = (result[year][field] || 0) + toNum(row[col]);
+        counts[year][field] = (counts[year][field] || 0) + 1;
       });
     });
-    const uniqueYears = [...new Set(years)].sort();
+    const uniqueYears = [...new Set(Object.keys(result))].sort();
     if (uniqueYears.length > 0) return { format: "wide", data: result, years: uniqueYears, unmapped };
   }
 
