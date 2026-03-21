@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ResponsiveContainer,
+  ResponsiveContainer, ReferenceLine,
 } from "recharts";
 
 const C = {
@@ -143,6 +143,119 @@ function buildCategoryData(headers, rows, catCols, numCols) {
     .slice(0, 20);
 }
 
+// ── FORECASTING ───────────────────────────────────────────────────────────────
+
+function linearRegression(ys) {
+  // Simple OLS on index 0..n-1
+  const n = ys.length;
+  if (n < 2) return { slope: 0, intercept: ys[0] || 0, r2: 0 };
+  const sumX = (n * (n - 1)) / 2;
+  const sumX2 = (n * (n - 1) * (2 * n - 1)) / 6;
+  const sumY = ys.reduce((a, b) => a + b, 0);
+  const sumXY = ys.reduce((s, y, i) => s + i * y, 0);
+  const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+  const intercept = (sumY - slope * sumX) / n;
+  // R²
+  const meanY = sumY / n;
+  const ssTot = ys.reduce((s, y) => s + (y - meanY) ** 2, 0);
+  const ssRes = ys.reduce((s, y, i) => s + (y - (intercept + slope * i)) ** 2, 0);
+  const r2 = ssTot === 0 ? 1 : Math.max(0, 1 - ssRes / ssTot);
+  return { slope, intercept, r2 };
+}
+
+// Build combined historical + forecast data for chart
+function buildForecastData(tsData, numCols, periods, scenarios) {
+  // tsData = [{ x: label, col1: val, col2: val, ... }]
+  const result = tsData.map((d, i) => ({ ...d, _type: "historical" }));
+
+  // For each numeric col, regress and project
+  const regressions = {};
+  numCols.forEach((col) => {
+    const ys = tsData.map((d) => d[col] || 0);
+    regressions[col] = linearRegression(ys);
+  });
+
+  // Determine next period labels
+  const lastLabel = tsData[tsData.length - 1]?.x;
+  const isYear = /^\d{4}$/.test(String(lastLabel));
+  const lastYear = isYear ? parseInt(lastLabel) : null;
+
+  for (let i = 1; i <= periods; i++) {
+    const xLabel = lastYear ? String(lastYear + i) : `+${i}`;
+    const point = { x: xLabel, _type: "forecast" };
+    const idx = tsData.length - 1 + i;
+    numCols.forEach((col) => {
+      const { slope, intercept } = regressions[col];
+      const base = intercept + slope * idx;
+      point[`${col}_base`] = Math.max(0, base);
+      point[`${col}_bull`] = Math.max(0, base * (1 + scenarios.bull / 100));
+      point[`${col}_bear`] = Math.max(0, base * (1 + scenarios.bear / 100));
+    });
+    result.push(point);
+  }
+
+  return { chartData: result, regressions };
+}
+
+function ForecastTable({ tsData, numCols, periods, scenarios }) {
+  const lastLabel = tsData[tsData.length - 1]?.x;
+  const isYear = /^\d{4}$/.test(String(lastLabel));
+  const lastYear = isYear ? parseInt(lastLabel) : null;
+
+  const rows = [];
+  numCols.slice(0, 4).forEach((col) => {
+    const ys = tsData.map((d) => d[col] || 0);
+    const { slope, intercept, r2 } = linearRegression(ys);
+    const n = tsData.length;
+    const projections = Array.from({ length: periods }, (_, i) => {
+      const idx = n + i;
+      const base = Math.max(0, intercept + slope * idx);
+      return {
+        label: lastYear ? String(lastYear + i + 1) : `+${i + 1}`,
+        bear: Math.max(0, base * (1 + scenarios.bear / 100)),
+        base,
+        bull: Math.max(0, base * (1 + scenarios.bull / 100)),
+      };
+    });
+    rows.push({ col, r2, slope, projections });
+  });
+
+  return (
+    <div>
+      {rows.map(({ col, r2, slope, projections }) => (
+        <div key={col} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: "18px 20px", marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 14 }}>
+            <p style={{ color: C.text, fontWeight: 700, fontSize: 14, margin: 0 }}>{col}</p>
+            <span style={{ color: C.muted, fontSize: 12 }}>
+              Trend: {slope >= 0 ? "+" : ""}{fmt(slope)}/period · R² {(r2 * 100).toFixed(0)}%
+            </span>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: C.panel2 }}>
+                <th style={{ padding: "8px 12px", textAlign: "left", color: C.muted, fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", border: `1px solid ${C.border}` }}>Period</th>
+                <th style={{ padding: "8px 12px", textAlign: "right", color: "#B03A2A", fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", border: `1px solid ${C.border}` }}>Bear ({scenarios.bear}%)</th>
+                <th style={{ padding: "8px 12px", textAlign: "right", color: C.forest, fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", border: `1px solid ${C.border}` }}>Base</th>
+                <th style={{ padding: "8px 12px", textAlign: "right", color: "#2C6BBF", fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.07em", border: `1px solid ${C.border}` }}>Bull (+{scenarios.bull}%)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {projections.map((p) => (
+                <tr key={p.label} style={{ background: C.panel }}>
+                  <td style={{ padding: "8px 12px", color: C.text, fontWeight: 600, border: `1px solid ${C.border}` }}>{p.label}</td>
+                  <td style={{ padding: "8px 12px", color: "#B03A2A", textAlign: "right", border: `1px solid ${C.border}` }}>{fmt(p.bear)}</td>
+                  <td style={{ padding: "8px 12px", color: C.forest, textAlign: "right", fontWeight: 700, border: `1px solid ${C.border}` }}>{fmt(p.base)}</td>
+                  <td style={{ padding: "8px 12px", color: "#2C6BBF", textAlign: "right", border: `1px solid ${C.border}` }}>{fmt(p.bull)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function KPICard({ label, value, sub }) {
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 20px" }}>
@@ -161,6 +274,8 @@ export default function DynamicDashboard({
   const { headers, rows } = data;
   const [activeTab, setActiveTab] = useState("overview");
   const [showProjectMenu, setShowProjectMenu] = useState(false);
+  const [forecastPeriods, setForecastPeriods] = useState(3);
+  const [scenarios, setScenarios] = useState({ bear: -20, bull: 20 });
 
   const cols = useMemo(() => analyzeColumns(headers, rows), [headers, rows]);
 
@@ -183,7 +298,14 @@ export default function DynamicDashboard({
   const visibleNumCols = numCols.slice(0, 5);
   const primaryCol = numCols[0];
 
-  const TABS = ["overview", "data"];
+  const canForecast = dateCols.length > 0 && numCols.length > 0 && chartData?.type === "timeseries" && chartData?.data?.length >= 2;
+
+  const forecastResult = useMemo(() => {
+    if (!canForecast) return null;
+    return buildForecastData(chartData.data, visibleNumCols, forecastPeriods, scenarios);
+  }, [canForecast, chartData, visibleNumCols, forecastPeriods, scenarios]);
+
+  const TABS = ["overview", ...(canForecast ? ["forecast"] : []), "data"];
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "Inter, sans-serif" }}>
@@ -245,7 +367,7 @@ export default function DynamicDashboard({
               borderBottom: activeTab === tab ? `2px solid ${C.forest}` : "2px solid transparent",
               cursor: "pointer", textTransform: "capitalize",
             }}>
-            {tab === "overview" ? "Overview" : "Data Table"}
+            {tab === "overview" ? "Overview" : tab === "forecast" ? "Forecast" : "Data Table"}
           </button>
         ))}
       </div>
@@ -350,6 +472,80 @@ export default function DynamicDashboard({
                 <p style={{ color: C.muted, fontSize: 14 }}>No numeric columns detected. Check the Data Table tab to review your data.</p>
               </div>
             )}
+          </>
+        )}
+
+        {activeTab === "forecast" && canForecast && (
+          <>
+            {/* Controls */}
+            <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: "16px 20px", marginBottom: 24, display: "flex", gap: 32, alignItems: "center", flexWrap: "wrap" }}>
+              <div>
+                <p style={{ color: C.muted, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", margin: "0 0 6px" }}>Forecast Periods</p>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {[3, 5, 10].map((p) => (
+                    <button key={p} onClick={() => setForecastPeriods(p)}
+                      style={{ background: forecastPeriods === p ? C.forest : C.panel2, color: forecastPeriods === p ? "#fff" : C.text, border: `1px solid ${forecastPeriods === p ? C.forest : C.border}`, borderRadius: 6, padding: "5px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                      {p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p style={{ color: C.muted, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", margin: "0 0 6px" }}>Bear Scenario</p>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input type="range" min={-50} max={-5} step={5} value={scenarios.bear}
+                    onChange={(e) => setScenarios(s => ({ ...s, bear: parseInt(e.target.value) }))}
+                    style={{ width: 100 }} />
+                  <span style={{ color: "#B03A2A", fontSize: 12, fontWeight: 600 }}>{scenarios.bear}%</span>
+                </div>
+              </div>
+              <div>
+                <p style={{ color: C.muted, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", margin: "0 0 6px" }}>Bull Scenario</p>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input type="range" min={5} max={100} step={5} value={scenarios.bull}
+                    onChange={(e) => setScenarios(s => ({ ...s, bull: parseInt(e.target.value) }))}
+                    style={{ width: 100 }} />
+                  <span style={{ color: "#2C6BBF", fontSize: 12, fontWeight: 600 }}>+{scenarios.bull}%</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Forecast chart — historical solid, forecast dashed */}
+            <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 12, padding: "20px 24px", marginBottom: 24 }}>
+              <p style={{ color: C.muted, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", margin: "0 0 6px" }}>
+                Historical + {forecastPeriods}-Period Forecast
+              </p>
+              <p style={{ color: C.muted, fontSize: 11, margin: "0 0 20px" }}>
+                Shaded area shows bear/bull range. Dashed line is base trend projection.
+              </p>
+              <ResponsiveContainer width="100%" height={340}>
+                <LineChart data={forecastResult?.chartData || []} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAxis dataKey="x" tick={{ fill: C.muted, fontSize: 11 }} />
+                  <YAxis tickFormatter={fmt} tick={{ fill: C.muted, fontSize: 11 }} width={65} />
+                  <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v, name) => [fmt(v, false), name]} />
+                  <Legend />
+                  {/* Split: historical line */}
+                  {visibleNumCols.map((col, i) => (
+                    <Line key={`hist_${col}`} type="monotone" dataKey={col}
+                      stroke={PALETTE[i % PALETTE.length]} strokeWidth={2.5}
+                      dot={(p) => p.payload._type === "forecast" ? <span /> : undefined}
+                      connectNulls name={col} />
+                  ))}
+                  {/* Forecast base lines (dashed) */}
+                  {visibleNumCols.map((col, i) => (
+                    <Line key={`fore_${col}`} type="monotone" dataKey={`${col}_base`}
+                      stroke={PALETTE[i % PALETTE.length]} strokeWidth={2} strokeDasharray="5 4"
+                      dot={{ r: 3 }} name={`${col} (forecast)`} />
+                  ))}
+                  <ReferenceLine x={chartData.data[chartData.data.length - 1]?.x}
+                    stroke={C.muted} strokeDasharray="3 3" label={{ value: "Now", fill: C.muted, fontSize: 10 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Scenario tables */}
+            <ForecastTable tsData={chartData.data} numCols={numCols} periods={forecastPeriods} scenarios={scenarios} />
           </>
         )}
 
