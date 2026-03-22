@@ -4,8 +4,11 @@
  * cream/beige bg, forest green + gold accents, Pnl / STitle / KCard / Tip components.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import { SECTOR_CONFIG } from "../sectorConfig";
+
+const ML_API = import.meta.env.VITE_ML_API_URL || "http://localhost:8000";
+const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY || "";
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line,
   ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -194,8 +197,45 @@ function buildForecast(tsData, numCols, periods, factors) {
   return future;
 }
 
+// ── Insight card skeleton ─────────────────────────────────────────────────────
+function InsightSkeleton({ accent }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginBottom: 20 }}>
+      {[0, 1, 2].map((i) => (
+        <div key={i} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 20px", position: "relative", overflow: "hidden" }}>
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: `${accent}40` }} />
+          <div style={{ width: "55%", height: 11, background: C.panel2, borderRadius: 4, marginBottom: 10, animation: "lm-pulse 1.4s ease-in-out infinite" }} />
+          <div style={{ width: "100%", height: 8, background: C.panel2, borderRadius: 4, marginBottom: 5, animation: "lm-pulse 1.4s ease-in-out infinite 0.1s" }} />
+          <div style={{ width: "85%", height: 8, background: C.panel2, borderRadius: 4, marginBottom: 14, animation: "lm-pulse 1.4s ease-in-out infinite 0.2s" }} />
+          <div style={{ width: "75%", height: 8, background: C.panel2, borderRadius: 4, animation: "lm-pulse 1.4s ease-in-out infinite 0.3s" }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Insight cards ─────────────────────────────────────────────────────────────
+function InsightCards({ cards, accent }) {
+  if (!cards.length) return null;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginBottom: 20 }}>
+      {cards.map((card, i) => (
+        <div key={i} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 20px", position: "relative", overflow: "hidden" }}>
+          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: accent }} />
+          <p style={{ color: accent, fontSize: 12, fontWeight: 700, margin: "0 0 8px", letterSpacing: "0.02em" }}>{card.title}</p>
+          <p style={{ color: C.text, fontSize: 12, margin: "0 0 10px", lineHeight: 1.55 }}>{card.explanation}</p>
+          <p style={{ color: C.muted, fontSize: 11, margin: 0, lineHeight: 1.45 }}>
+            <span style={{ color: accent, fontWeight: 700, marginRight: 4 }}>→</span>
+            <strong style={{ color: C.text }}>{card.action}</strong>
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Overview tab ──────────────────────────────────────────────────────────────
-function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData, accent, kpiMappings }) {
+function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData, accent, kpiMappings, insightCards, insightsLoading }) {
   const primaryCol  = numCols[0];
   const secondaryCol = numCols[1];
 
@@ -224,6 +264,10 @@ function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData, 
           <KCard label="Rows" value={rows.length} sub={`${headers.length} columns detected`} color={C.forest} />
         )}
       </div>
+
+      {/* AI insight cards */}
+      {insightsLoading && <InsightSkeleton accent={accent} />}
+      {!insightsLoading && <InsightCards cards={insightCards} accent={accent} />}
 
       <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 16, marginBottom: 16 }}>
         {/* Primary trend chart */}
@@ -597,6 +641,10 @@ export default function DynamicDashboard({
   const accent      = sectorCfg?.accentColor || C.forest;
   const kpiMappings = sectorCfg?.kpiMappings || [];
 
+  const [insightCards, setInsightCards]     = useState([]);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  const generatedKeyRef = useRef(null);
+
   const cols     = useMemo(() => analyzeColumns(headers, rows), [headers, rows]);
   const dateCols = useMemo(() => headers.filter((h) => cols[h]?.type === "date"), [headers, cols]);
   const numCols  = useMemo(() => headers.filter((h) => cols[h]?.type === "numeric"), [headers, cols]);
@@ -609,6 +657,97 @@ export default function DynamicDashboard({
   }, [rows, dateCols, numCols, catCols]);
 
   const canForecast = dateCols.length > 0 && numCols.length > 0 && tsData?.length >= 2;
+
+  // ── AI insight generation ────────────────────────────────────────────────────
+  useEffect(() => {
+    const dataKey = `${rows.length}-${headers.join(",")}`;
+    if (!ANTHROPIC_KEY || numCols.length === 0 || rows.length === 0 || generatedKeyRef.current === dataKey) return;
+    generatedKeyRef.current = dataKey;
+
+    setInsightCards([]);
+    setInsightsLoading(true);
+
+    (async () => {
+      try {
+        // Step 1: call /api/explain (SHAP). Needs ≥2 numeric cols: features + target.
+        const targetCol  = numCols[0];
+        const featureCols = numCols.slice(1, 7); // up to 6 features
+        let shapContext = "";
+
+        if (featureCols.length >= 1) {
+          try {
+            const explainRes = await fetch(`${ML_API}/api/explain`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              signal: AbortSignal.timeout(20000),
+              body: JSON.stringify({
+                data: rows.slice(0, 150).map((r) => {
+                  const out = {};
+                  [...featureCols, targetCol].forEach((c) => { out[c] = toNum(r[c]) ?? 0; });
+                  return out;
+                }),
+                feature_cols: featureCols,
+                target_col: targetCol,
+              }),
+            });
+            if (explainRes.ok) {
+              const shap = await explainRes.json();
+              const topFeatures = (shap.feature_importance || []).slice(0, 5)
+                .map((f) => `${f.feature} (${f.importance_pct}% of impact)`).join(", ");
+              const topWaterfall = (shap.waterfall_row0 || []).slice(0, 4)
+                .map((w) => `${w.feature}: ${w.shap_value >= 0 ? "+" : ""}${w.shap_value} (value=${w.feature_value})`).join("; ");
+              shapContext = `Target KPI: ${shap.target}. Top predictors: ${topFeatures}. SHAP breakdown for first record: ${topWaterfall}. Baseline prediction: ${shap.base_value}.`;
+            }
+          } catch {
+            // SHAP unavailable — fall through to stats fallback
+          }
+        }
+
+        // Fallback: use column statistics if SHAP is unavailable
+        if (!shapContext) {
+          shapContext = "Key metric statistics: " + numCols.slice(0, 6).map((col) => {
+            const info = cols[col];
+            return `${col}: total=${fmt(info.sum)}, avg=${fmt(info.avg)}, min=${fmt(info.min)}, max=${fmt(info.max)}`;
+          }).join("; ");
+        }
+
+        // Step 2: call Anthropic API to generate insight cards
+        const sectorName = sectorCfg?.displayName || "general business";
+        const extraContext = sectorCfg?.insightContext ? `\nSector context: ${sectorCfg.insightContext}` : "";
+        const systemPrompt = `You are a financial analyst generating actionable insights for a ${sectorName} sector client. Convert the following SHAP feature attribution data into 3 to 5 plain-English insight cards. Each card should have: a short title, one sentence explaining what is driving the result, and one recommended action. Be specific and avoid jargon.`;
+        const userMessage = `Dataset: ${rows.length} records across columns: ${numCols.join(", ")}.${extraContext}\n\n${shapContext}\n\nReturn ONLY a JSON array — no markdown, no explanation. Each element must have exactly these keys: "title" (string, ≤8 words), "explanation" (one sentence), "action" (one actionable recommendation starting with a verb).`;
+
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": ANTHROPIC_KEY,
+            "anthropic-version": "2023-06-01",
+            "anthropic-dangerous-allow-browser": "true",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 1024,
+            system: systemPrompt,
+            messages: [{ role: "user", content: userMessage }],
+          }),
+        });
+
+        if (!res.ok) throw new Error(`Anthropic ${res.status}`);
+        const payload = await res.json();
+        const text = payload.content?.[0]?.text || "";
+        const match = text.match(/\[[\s\S]*\]/);
+        if (match) {
+          const parsed = JSON.parse(match[0]);
+          if (Array.isArray(parsed)) setInsightCards(parsed.slice(0, 5));
+        }
+      } catch (err) {
+        console.warn("Insight generation failed:", err.message);
+      } finally {
+        setInsightsLoading(false);
+      }
+    })();
+  }, [data]); // re-run when the project dataset changes
 
   const tabs = [
     { id: "overview",     label: "Overview" },
@@ -639,6 +778,7 @@ export default function DynamicDashboard({
 
   return (
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "'DM Sans','Helvetica Neue',sans-serif", color: C.text, paddingBottom: 48 }}>
+      <style>{`@keyframes lm-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }`}</style>
 
       {/* Header — matches PVAKDashboard exactly */}
       <div style={{ background: C.panel, borderBottom: `1px solid ${C.border}`, padding: "0 28px" }}>
@@ -720,7 +860,7 @@ export default function DynamicDashboard({
           ))}
         </div>
 
-        {tab === "overview"      && <OverviewTab      headers={headers} rows={rows} cols={cols} dateCols={dateCols} numCols={numCols} catCols={catCols} tsData={tsData} accent={accent} kpiMappings={kpiMappings} />}
+        {tab === "overview"      && <OverviewTab      headers={headers} rows={rows} cols={cols} dateCols={dateCols} numCols={numCols} catCols={catCols} tsData={tsData} accent={accent} kpiMappings={kpiMappings} insightCards={insightCards} insightsLoading={insightsLoading} />}
         {tab === "scenarios"     && <ScenariosTab     tsData={tsData} numCols={numCols} accent={accent} />}
         {tab === "distribution"  && <DistributionTab  headers={headers} rows={rows} cols={cols} numCols={numCols} catCols={catCols} />}
         {tab === "data"          && <DataTableTab     headers={headers} rows={rows} cols={cols} accent={accent} />}
