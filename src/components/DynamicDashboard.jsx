@@ -8,7 +8,6 @@ import { useMemo, useState, useEffect, useRef } from "react";
 import { SECTOR_CONFIG } from "../sectorConfig";
 
 const ML_API = import.meta.env.VITE_ML_API_URL || "http://localhost:8000";
-const ANTHROPIC_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY || "";
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line,
   ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -661,7 +660,7 @@ export default function DynamicDashboard({
   // ── AI insight generation ────────────────────────────────────────────────────
   useEffect(() => {
     const dataKey = `${rows.length}-${headers.join(",")}`;
-    if (!ANTHROPIC_KEY || numCols.length === 0 || rows.length === 0 || generatedKeyRef.current === dataKey) return;
+    if (numCols.length === 0 || rows.length === 0 || generatedKeyRef.current === dataKey) return;
     generatedKeyRef.current = dataKey;
 
     setInsightCards([]);
@@ -711,36 +710,23 @@ export default function DynamicDashboard({
           }).join("; ");
         }
 
-        // Step 2: call Anthropic API to generate insight cards
-        const sectorName = sectorCfg?.displayName || "general business";
-        const extraContext = sectorCfg?.insightContext ? `\nSector context: ${sectorCfg.insightContext}` : "";
-        const systemPrompt = `You are a financial analyst generating actionable insights for a ${sectorName} sector client. Convert the following SHAP feature attribution data into 3 to 5 plain-English insight cards. Each card should have: a short title, one sentence explaining what is driving the result, and one recommended action. Be specific and avoid jargon.`;
-        const userMessage = `Dataset: ${rows.length} records across columns: ${numCols.join(", ")}.${extraContext}\n\n${shapContext}\n\nReturn ONLY a JSON array — no markdown, no explanation. Each element must have exactly these keys: "title" (string, ≤8 words), "explanation" (one sentence), "action" (one actionable recommendation starting with a verb).`;
-
-        const res = await fetch("https://api.anthropic.com/v1/messages", {
+        // Step 2: call /api/insights on the backend — Anthropic key stays server-side
+        const res = await fetch(`${ML_API}/api/insights`, {
           method: "POST",
-          headers: {
-            "x-api-key": ANTHROPIC_KEY,
-            "anthropic-version": "2023-06-01",
-            "anthropic-dangerous-allow-browser": "true",
-            "content-type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(30000),
           body: JSON.stringify({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 1024,
-            system: systemPrompt,
-            messages: [{ role: "user", content: userMessage }],
+            shap_context: shapContext,
+            sector_display_name: sectorCfg?.displayName || null,
+            sector_insight_context: sectorCfg?.insightContext || null,
+            num_cols: numCols,
+            row_count: rows.length,
           }),
         });
 
-        if (!res.ok) throw new Error(`Anthropic ${res.status}`);
+        if (!res.ok) throw new Error(`Insights API ${res.status}`);
         const payload = await res.json();
-        const text = payload.content?.[0]?.text || "";
-        const match = text.match(/\[[\s\S]*\]/);
-        if (match) {
-          const parsed = JSON.parse(match[0]);
-          if (Array.isArray(parsed)) setInsightCards(parsed.slice(0, 5));
-        }
+        if (Array.isArray(payload.cards)) setInsightCards(payload.cards);
       } catch (err) {
         console.warn("Insight generation failed:", err.message);
       } finally {

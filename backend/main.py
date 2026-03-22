@@ -10,6 +10,8 @@ Endpoints:
 
 import io
 import json
+import os
+import re
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body
@@ -150,6 +152,63 @@ def explain(req: ExplainRequest):
         return shap_explain(req.data, req.feature_cols, req.target_col)
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+# ── Step 4b: AI Insight Cards ─────────────────────────────────────────────────
+
+class InsightsRequest(BaseModel):
+    shap_context: str
+    sector_display_name: Optional[str] = None
+    sector_insight_context: Optional[str] = None
+    num_cols: list[str]
+    row_count: int
+
+
+@app.post("/api/insights")
+def insights(req: InsightsRequest):
+    """
+    Call Claude to convert SHAP feature attribution data into plain-English
+    insight cards. The Anthropic API key lives here on the server — it is
+    never exposed to the browser.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(500, "ANTHROPIC_API_KEY is not configured on this server.")
+
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+
+    sector_name = req.sector_display_name or "general business"
+    extra = f"\nSector context: {req.sector_insight_context}" if req.sector_insight_context else ""
+
+    system_prompt = (
+        f"You are a financial analyst generating actionable insights for a {sector_name} "
+        "sector client. Convert the following SHAP feature attribution data into 3 to 5 "
+        "plain-English insight cards. Each card should have: a short title, one sentence "
+        "explaining what is driving the result, and one recommended action. Be specific and avoid jargon."
+    )
+    user_message = (
+        f"Dataset: {req.row_count} records across columns: {', '.join(req.num_cols)}.{extra}\n\n"
+        f"{req.shap_context}\n\n"
+        'Return ONLY a JSON array — no markdown, no explanation. Each element must have '
+        'exactly these keys: "title" (string, ≤8 words), "explanation" (one sentence), '
+        '"action" (one actionable recommendation starting with a verb).'
+    )
+
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        system=system_prompt,
+        messages=[{"role": "user", "content": user_message}],
+    )
+
+    text = message.content[0].text
+    match = re.search(r"\[[\s\S]*\]", text)
+    if not match:
+        raise HTTPException(500, "Could not parse insight cards from model response.")
+
+    cards = json.loads(match.group())
+    return {"cards": cards[:5]}
 
 
 # ── Step 5: Monte Carlo ───────────────────────────────────────────────────────
