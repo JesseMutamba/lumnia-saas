@@ -5,6 +5,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { SECTOR_CONFIG } from "../sectorConfig";
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line,
   ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -114,6 +115,16 @@ function analyzeColumns(headers, rows) {
   return cols;
 }
 
+// ── Sector KPI matching ───────────────────────────────────────────────────────
+// Returns the matching kpiMapping entry for a column name, or null.
+function matchKpi(colName, kpiMappings) {
+  if (!kpiMappings?.length) return null;
+  const lower = colName.toLowerCase();
+  return kpiMappings.find((kpi) =>
+    kpi.columnKeywords.some((kw) => lower.includes(kw.toLowerCase()))
+  ) || null;
+}
+
 // ── Linear regression for scenarios ──────────────────────────────────────────
 function linReg(ys) {
   const n = ys.length;
@@ -184,21 +195,24 @@ function buildForecast(tsData, numCols, periods, factors) {
 }
 
 // ── Overview tab ──────────────────────────────────────────────────────────────
-function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData }) {
+function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData, accent, kpiMappings }) {
   const primaryCol  = numCols[0];
   const secondaryCol = numCols[1];
 
-  // KPI cards
+  // KPI cards — use sector label/unit when a kpiMapping matches the column name
   const kpis = numCols.slice(0, 4).map((col) => {
     const info = cols[col];
+    const matched = matchKpi(col, kpiMappings);
     const firstVal = toNum(rows[0]?.[col]);
     const lastVal  = toNum(rows[rows.length - 1]?.[col]);
-    let sub = `Avg: ${fmt(info.avg)}`;
+    let sub = `Avg: ${fmt(info.avg)}${matched?.unit ? " " + matched.unit : ""}`;
     if (dateCols.length > 0 && firstVal && lastVal && firstVal !== 0) {
       const pct = ((lastVal - firstVal) / Math.abs(firstVal)) * 100;
       sub = `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}% over period`;
     }
-    return { label: col, value: fmt(info.sum), sub, color: PALETTE[numCols.indexOf(col)] };
+    const label = matched ? matched.label : col;
+    const color = numCols.indexOf(col) === 0 ? accent : PALETTE[numCols.indexOf(col)];
+    return { label, value: fmt(info.sum), sub, color };
   });
 
   return (
@@ -214,7 +228,7 @@ function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData }
       <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 16, marginBottom: 16 }}>
         {/* Primary trend chart */}
         <Pnl>
-          <STitle accent={C.forest} sub={dateCols.length > 0 ? `${primaryCol} over ${dateCols[0]}` : `${primaryCol} distribution`}>
+          <STitle accent={accent} sub={dateCols.length > 0 ? `${primaryCol} over ${dateCols[0]}` : `${primaryCol} distribution`}>
             {primaryCol ? `${primaryCol} — Trajectory` : "Overview"}
           </STitle>
           <ResponsiveContainer width="100%" height={210}>
@@ -222,15 +236,15 @@ function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData }
               <AreaChart data={tsData}>
                 <defs>
                   <linearGradient id="ovG" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="10%" stopColor={C.forest} stopOpacity={0.18} />
-                    <stop offset="90%" stopColor={C.forest} stopOpacity={0.01} />
+                    <stop offset="10%" stopColor={accent} stopOpacity={0.18} />
+                    <stop offset="90%" stopColor={accent} stopOpacity={0.01} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="2 4" stroke={C.border} />
                 <XAxis dataKey="x" tick={{ fill: C.muted, fontSize: 11 }} axisLine={false} tickLine={false} />
                 <YAxis tickFormatter={fmt} tick={{ fill: C.muted, fontSize: 10 }} axisLine={false} tickLine={false} width={64} />
                 <Tooltip content={<Tip />} />
-                {primaryCol && <Area type="monotone" dataKey={primaryCol} name={primaryCol} stroke={C.forest} strokeWidth={2} fill="url(#ovG)" dot={{ fill: C.forest, r: 4, strokeWidth: 0 }} />}
+                {primaryCol && <Area type="monotone" dataKey={primaryCol} name={primaryCol} stroke={accent} strokeWidth={2} fill="url(#ovG)" dot={{ fill: accent, r: 4, strokeWidth: 0 }} />}
               </AreaChart>
             ) : (
               <BarChart data={numCols.map((col) => ({ name: col, value: cols[col]?.sum || 0 }))}>
@@ -272,7 +286,7 @@ function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData }
       {tsData && tsData.length > 0 && numCols.length > 1 && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           <Pnl>
-            <STitle accent={C.leaf} sub="All numeric metrics over time">
+            <STitle accent={accent} sub="All numeric metrics over time">
               All Metrics — Trend Lines
             </STitle>
             <ResponsiveContainer width="100%" height={200}>
@@ -313,7 +327,7 @@ function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData }
 }
 
 // ── Scenarios tab ─────────────────────────────────────────────────────────────
-function ScenariosTab({ tsData, numCols }) {
+function ScenariosTab({ tsData, numCols, accent }) {
   const [periods, setPeriods] = useState(3);
   const [factors, setFactors] = useState({ bear: -20, bull: 20 });
   const primaryCol = numCols[0];
@@ -332,7 +346,7 @@ function ScenariosTab({ tsData, numCols }) {
   const summaryScenarios = [
     { key: "bear",   label: "Bear",   color: C.red },
     { key: "base",   label: "Base",   color: C.gold },
-    { key: "bull",   label: "Bull",   color: C.forest },
+    { key: "bull",   label: "Bull",   color: accent },
   ];
 
   return (
@@ -364,7 +378,7 @@ function ScenariosTab({ tsData, numCols }) {
               <span style={{ color: C.forest, fontWeight: 700, fontFamily: "monospace", fontSize: 12 }}>{periods}</span>
             </div>
             <input type="range" min={1} max={10} step={1} value={periods} onChange={(e) => setPeriods(parseInt(e.target.value))}
-              style={{ width: "100%", accentColor: C.forest, height: 4, cursor: "pointer" }} />
+              style={{ width: "100%", accentColor: accent, height: 4, cursor: "pointer" }} />
           </div>
 
           <div style={{ marginBottom: 14 }}>
@@ -382,7 +396,7 @@ function ScenariosTab({ tsData, numCols }) {
               <span style={{ color: C.forest, fontWeight: 700, fontFamily: "monospace", fontSize: 12 }}>+{factors.bull}%</span>
             </div>
             <input type="range" min={5} max={100} step={5} value={factors.bull} onChange={(e) => setFactors((f) => ({ ...f, bull: parseInt(e.target.value) }))}
-              style={{ width: "100%", accentColor: C.forest, height: 4, cursor: "pointer" }} />
+              style={{ width: "100%", accentColor: accent, height: 4, cursor: "pointer" }} />
           </div>
 
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
@@ -398,7 +412,7 @@ function ScenariosTab({ tsData, numCols }) {
 
         {/* Forecast chart */}
         <Pnl>
-          <STitle accent={C.forest} sub={`Historical (solid) + ${periods}-period forecast (dashed) — bear / base / bull`}>
+          <STitle accent={accent} sub={`Historical (solid) + ${periods}-period forecast (dashed) — bear / base / bull`}>
             {primaryCol} — Scenario Forecast
           </STitle>
           <ResponsiveContainer width="100%" height={270}>
@@ -410,10 +424,10 @@ function ScenariosTab({ tsData, numCols }) {
               <Legend wrapperStyle={{ color: C.muted, fontSize: 11 }} />
               <ReferenceLine x={tsData[tsData.length - 1]?.x} stroke={C.border} strokeDasharray="3 3" />
               {/* Historical */}
-              <Line type="monotone" dataKey={primaryCol} name={primaryCol} stroke={C.forest} strokeWidth={2.5} dot={{ r: 4, fill: C.forest, strokeWidth: 0 }} connectNulls={false} />
+              <Line type="monotone" dataKey={primaryCol} name={primaryCol} stroke={accent} strokeWidth={2.5} dot={{ r: 4, fill: accent, strokeWidth: 0 }} connectNulls={false} />
               {/* Forecast lines */}
               <Line type="monotone" dataKey={`${primaryCol}_base`} name="Base forecast" stroke={C.gold}   strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: C.gold,   strokeWidth: 0 }} />
-              <Line type="monotone" dataKey={`${primaryCol}_bull`} name="Bull forecast" stroke={C.leaf}   strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: C.leaf,   strokeWidth: 0 }} />
+              <Line type="monotone" dataKey={`${primaryCol}_bull`} name="Bull forecast" stroke={accent}   strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: accent,   strokeWidth: 0 }} />
               <Line type="monotone" dataKey={`${primaryCol}_bear`} name="Bear forecast" stroke={C.red}    strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3, fill: C.red,    strokeWidth: 0 }} />
             </ComposedChart>
           </ResponsiveContainer>
@@ -422,7 +436,7 @@ function ScenariosTab({ tsData, numCols }) {
 
       {/* Scenario comparison table */}
       <Pnl>
-        <STitle accent={C.forest} sub="Projected values per metric across all scenarios">
+        <STitle accent={accent} sub="Projected values per metric across all scenarios">
           Full Scenario Comparison Table
         </STitle>
         <div style={{ overflowX: "auto" }}>
@@ -440,7 +454,7 @@ function ScenariosTab({ tsData, numCols }) {
                 <th style={{ padding: "4px 10px" }} />
                 {forecastTableCols.map((col) =>
                   ["Bear", "Base", "Bull"].map((s) => (
-                    <th key={col + s} style={{ color: s === "Bear" ? C.red : s === "Bull" ? C.forest : C.gold, textAlign: "right", padding: "4px 8px", fontSize: 9, borderLeft: s === "Bear" ? `1px solid ${C.border}` : "none" }}>
+                    <th key={col + s} style={{ color: s === "Bear" ? C.red : s === "Bull" ? accent : C.gold, textAlign: "right", padding: "4px 8px", fontSize: 9, borderLeft: s === "Bear" ? `1px solid ${C.border}` : "none" }}>
                       {s}
                     </th>
                   ))
@@ -453,7 +467,7 @@ function ScenariosTab({ tsData, numCols }) {
                   <td style={{ padding: "8px 10px", color: C.text, fontWeight: 600, fontFamily: "monospace", fontSize: 11 }}>{row.x}</td>
                   {forecastTableCols.map((col) =>
                     (["bear", "base", "bull"]).map((s) => (
-                      <td key={col + s} style={{ padding: "8px 8px", textAlign: "right", fontFamily: "monospace", fontSize: 10, color: s === "bear" ? C.red : s === "bull" ? C.forest : C.gold, fontWeight: s === "base" ? 700 : 400, borderLeft: s === "bear" ? `1px solid ${C.border}` : "none" }}>
+                      <td key={col + s} style={{ padding: "8px 8px", textAlign: "right", fontFamily: "monospace", fontSize: 10, color: s === "bear" ? C.red : s === "bull" ? accent : C.gold, fontWeight: s === "base" ? 700 : 400, borderLeft: s === "bear" ? `1px solid ${C.border}` : "none" }}>
                         {fmt(row[`${col}_${s}`])}
                       </td>
                     ))
@@ -535,10 +549,10 @@ function DistributionTab({ headers, rows, cols, numCols, catCols }) {
 }
 
 // ── Data Table tab ────────────────────────────────────────────────────────────
-function DataTableTab({ headers, rows, cols }) {
+function DataTableTab({ headers, rows, cols, accent }) {
   return (
     <Pnl>
-      <STitle accent={C.forest} sub={`${rows.length} rows · ${headers.length} columns`}>Raw Data</STitle>
+      <STitle accent={accent} sub={`${rows.length} rows · ${headers.length} columns`}>Raw Data</STitle>
       <div style={{ overflowX: "auto", maxHeight: 560, overflowY: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
           <thead style={{ position: "sticky", top: 0, background: C.panel2 }}>
@@ -578,6 +592,10 @@ export default function DynamicDashboard({
   const { headers, rows } = data;
   const [tab, setTab] = useState("overview");
   const [showProjectMenu, setShowProjectMenu] = useState(false);
+
+  const sectorCfg   = sector ? SECTOR_CONFIG[sector] : null;
+  const accent      = sectorCfg?.accentColor || C.forest;
+  const kpiMappings = sectorCfg?.kpiMappings || [];
 
   const cols     = useMemo(() => analyzeColumns(headers, rows), [headers, rows]);
   const dateCols = useMemo(() => headers.filter((h) => cols[h]?.type === "date"), [headers, cols]);
@@ -626,12 +644,19 @@ export default function DynamicDashboard({
       <div style={{ background: C.panel, borderBottom: `1px solid ${C.border}`, padding: "0 28px" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: 18, paddingBottom: 14 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div style={{ width: 38, height: 38, borderRadius: 8, background: C.forest, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ width: 38, height: 38, borderRadius: 8, background: accent, display: "flex", alignItems: "center", justifyContent: "center" }}>
               <span style={{ color: "#fff", fontSize: 14, fontWeight: 800, letterSpacing: 1 }}>L</span>
             </div>
             <div>
               <h1 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: C.text, letterSpacing: "-0.01em" }}>Lumina Intelligence</h1>
-              <p style={{ margin: 0, fontSize: 11, color: C.muted, letterSpacing: "0.02em" }}>{projectName} · {rows.length} records · {numCols.length} metrics</p>
+              <p style={{ margin: 0, fontSize: 11, color: C.muted, letterSpacing: "0.02em" }}>
+                {projectName} · {rows.length} records · {numCols.length} metrics
+                {sectorCfg && (
+                  <span style={{ marginLeft: 8, background: `${accent}18`, color: accent, borderRadius: 4, padding: "1px 7px", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                    {sectorCfg.displayName}
+                  </span>
+                )}
+              </p>
             </div>
           </div>
 
@@ -660,7 +685,7 @@ export default function DynamicDashboard({
               )}
             </div>
             {[
-              { label: "Edit Data",  onClick: onEditProject, color: C.forest, bg: `${C.forest}18` },
+              { label: "Edit Data",  onClick: onEditProject, color: accent, bg: `${accent}18` },
               { label: "Sign Out",   onClick: onSignOut,     color: C.muted,  bg: "none" },
             ].map((b) => (
               <button key={b.label} onClick={b.onClick}
@@ -676,7 +701,7 @@ export default function DynamicDashboard({
         <div style={{ display: "flex", gap: 0, overflowX: "auto" }}>
           {tabs.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              style={{ background: "none", border: "none", cursor: "pointer", padding: "11px 18px", fontSize: 12, fontWeight: tab === t.id ? 700 : 500, color: tab === t.id ? C.forest : C.muted, borderBottom: tab === t.id ? `2px solid ${C.forest}` : "2px solid transparent", letterSpacing: "0.02em", transition: "color 0.15s", whiteSpace: "nowrap" }}>
+              style={{ background: "none", border: "none", cursor: "pointer", padding: "11px 18px", fontSize: 12, fontWeight: tab === t.id ? 700 : 500, color: tab === t.id ? accent : C.muted, borderBottom: tab === t.id ? `2px solid ${accent}` : "2px solid transparent", letterSpacing: "0.02em", transition: "color 0.15s", whiteSpace: "nowrap" }}>
               {t.label}
             </button>
           ))}
@@ -686,7 +711,7 @@ export default function DynamicDashboard({
       <div style={{ padding: "24px 28px" }}>
         {/* Auto-insights banner */}
         <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 18px", marginBottom: 20, display: "flex", gap: 20, flexWrap: "wrap", alignItems: "center" }}>
-          <div style={{ width: 3, height: 14, background: C.gold, borderRadius: 2, flexShrink: 0 }} />
+          <div style={{ width: 3, height: 14, background: accent, borderRadius: 2, flexShrink: 0 }} />
           {insights.map((ins, i) => (
             <span key={i} style={{ color: i === 0 ? C.muted : C.text, fontSize: 12 }}>
               {i > 0 && <span style={{ color: C.border, marginRight: 8 }}>·</span>}
@@ -695,10 +720,10 @@ export default function DynamicDashboard({
           ))}
         </div>
 
-        {tab === "overview"      && <OverviewTab      headers={headers} rows={rows} cols={cols} dateCols={dateCols} numCols={numCols} catCols={catCols} tsData={tsData} />}
-        {tab === "scenarios"     && <ScenariosTab     tsData={tsData} numCols={numCols} />}
+        {tab === "overview"      && <OverviewTab      headers={headers} rows={rows} cols={cols} dateCols={dateCols} numCols={numCols} catCols={catCols} tsData={tsData} accent={accent} kpiMappings={kpiMappings} />}
+        {tab === "scenarios"     && <ScenariosTab     tsData={tsData} numCols={numCols} accent={accent} />}
         {tab === "distribution"  && <DistributionTab  headers={headers} rows={rows} cols={cols} numCols={numCols} catCols={catCols} />}
-        {tab === "data"          && <DataTableTab     headers={headers} rows={rows} cols={cols} />}
+        {tab === "data"          && <DataTableTab     headers={headers} rows={rows} cols={cols} accent={accent} />}
       </div>
     </div>
   );
