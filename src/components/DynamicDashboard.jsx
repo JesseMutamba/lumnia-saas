@@ -6,6 +6,7 @@
 
 import { useMemo, useState, useEffect, useRef } from "react";
 import { SECTOR_CONFIG } from "../sectorConfig";
+import FinancialHealthScore from "./FinancialHealthScore";
 
 const ML_API = import.meta.env.VITE_ML_API_URL || "http://localhost:8000";
 import {
@@ -240,7 +241,7 @@ function InsightCards({ cards, accent }) {
 }
 
 // ── Overview tab ──────────────────────────────────────────────────────────────
-function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData, accent, kpiMappings, insightCards, insightsLoading }) {
+function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData, accent, kpiMappings, insightCards, insightsLoading, sector }) {
   const primaryCol  = numCols[0];
   const secondaryCol = numCols[1];
 
@@ -260,14 +261,45 @@ function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData, 
     return { label, value: fmt(info.sum), sub, color };
   });
 
+  // ── Financial Health Score inputs ──────────────────────────────────────────
+  const findCol = (keywords) => numCols.find((c) => {
+    const lower = c.toLowerCase();
+    return keywords.some((kw) => lower.includes(kw));
+  });
+  const marginCol  = findCol(["margin", "profit", "net income", "ebitda", "surplus"]);
+  const revenueCol = findCol(["revenue", "income", "sales", "billing", "receipts"]);
+  const costCol    = findCol(["cost", "opex", "expense", "expenditure"]);
+
+  const marginAvg = marginCol ? (cols[marginCol]?.avg ?? 0) : 0;
+
+  function colGrowthPct(col) {
+    if (!col || !tsData || tsData.length < 2) return 0;
+    const first = tsData[0]?.[col];
+    const last  = tsData[tsData.length - 1]?.[col];
+    if (!first || first === 0) return 0;
+    return ((last - first) / Math.abs(first)) * 100;
+  }
+  const revenueGrowth = colGrowthPct(revenueCol);
+  const costGrowth    = colGrowthPct(costCol);
+  const anomalyCount  = rows.filter((r) => r.is_anomaly === true || r.is_anomaly === 1).length;
+
   return (
     <div>
-      {/* KPI row */}
-      <div style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
-        {kpis.map((k) => <KCard key={k.label} {...k} />)}
-        {numCols.length === 0 && (
-          <KCard label="Rows" value={rows.length} sub={`${headers.length} columns detected`} color={C.forest} />
-        )}
+      {/* KPI row + Financial Health Score */}
+      <div style={{ display: "flex", gap: 14, marginBottom: 20, alignItems: "flex-start" }}>
+        <div style={{ flex: 1, display: "flex", gap: 14, flexWrap: "wrap" }}>
+          {kpis.map((k) => <KCard key={k.label} {...k} />)}
+          {numCols.length === 0 && (
+            <KCard label="Rows" value={rows.length} sub={`${headers.length} columns detected`} color={C.forest} />
+          )}
+        </div>
+        <FinancialHealthScore
+          margin={marginAvg}
+          revenueGrowth={revenueGrowth}
+          costGrowth={costGrowth}
+          anomalyCount={anomalyCount}
+          sector={sector}
+        />
       </div>
 
       {/* AI insight cards */}
@@ -852,7 +884,7 @@ export default function DynamicDashboard({
           ))}
         </div>
 
-        {tab === "overview"      && <OverviewTab      headers={headers} rows={rows} cols={cols} dateCols={dateCols} numCols={numCols} catCols={catCols} tsData={tsData} accent={accent} kpiMappings={kpiMappings} insightCards={insightCards} insightsLoading={insightsLoading} />}
+        {tab === "overview"      && <OverviewTab      headers={headers} rows={rows} cols={cols} dateCols={dateCols} numCols={numCols} catCols={catCols} tsData={tsData} accent={accent} kpiMappings={kpiMappings} insightCards={insightCards} insightsLoading={insightsLoading} sector={sector} />}
         {tab === "scenarios"     && <ScenariosTab     tsData={tsData} numCols={numCols} accent={accent} />}
         {tab === "distribution"  && <DistributionTab  headers={headers} rows={rows} cols={cols} numCols={numCols} catCols={catCols} />}
         {tab === "data"          && <DataTableTab     headers={headers} rows={rows} cols={cols} accent={accent} />}
