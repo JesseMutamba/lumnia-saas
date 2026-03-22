@@ -573,7 +573,7 @@ function DataTableTab({ headers, rows, cols }) {
 
 // ── Main DynamicDashboard ─────────────────────────────────────────────────────
 export default function DynamicDashboard({
-  data, projectName, projects, onSwitchProject, onNewProject, onEditProject, onSignOut, userEmail,
+  data, projectName, projects, onSwitchProject, onNewProject, onEditProject, onSignOut, userEmail, sector,
 }) {
   const { headers, rows } = data;
   const [tab, setTab] = useState("overview");

@@ -494,6 +494,8 @@ export default function DataInput() {
   const [rawDataset, setRawDataset] = useState(null); // { headers, rows }
   const [dataMode, setDataMode] = useState("financial"); // "financial" | "generic"
 
+  const [sector, setSector] = useState("");
+
   useEffect(() => {
     loadProjects();
     if (editId) loadProject(editId);
@@ -513,6 +515,7 @@ export default function DataInput() {
       .from("financial_projects").select("*").eq("id", id).single();
     if (data) {
       setProjectName(data.name);
+      setSector(data.sector || "");
       const detectedYears = data.data.map((_, i) => String(2025 + i));
       setYears(detectedYears);
       setRows(data.data);
@@ -630,7 +633,7 @@ export default function DataInput() {
     let error;
     if (editId) {
       ({ error } = await supabase.from("financial_projects")
-        .update({ name: projectName || "My Project", data: saveData })
+        .update({ name: projectName || "My Project", data: saveData, sector: sector || null })
         .eq("id", editId)
         .eq("user_id", user.id));
     } else {
@@ -638,6 +641,7 @@ export default function DataInput() {
         user_id: user.id,
         name: projectName || "My Project",
         data: saveData,
+        sector: sector || null,
       }));
     }
 
@@ -754,6 +758,22 @@ export default function DataInput() {
         )}
 
         <form onSubmit={handleSave}>
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: "block", color: C.muted, fontSize: 11, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 6 }}>Sector</label>
+            <select
+              value={sector}
+              onChange={(e) => setSector(e.target.value)}
+              style={{ padding: "10px 14px", border: `1px solid ${C.border}`, borderRadius: 8, background: C.panel, color: sector ? C.text : C.muted, fontSize: 14, width: 360, outline: "none", boxSizing: "border-box", cursor: "pointer" }}
+            >
+              <option value="">Select a sector (optional)</option>
+              <option value="healthcare">Healthcare</option>
+              <option value="energy">Energy</option>
+              <option value="hospitality">Hospitality</option>
+              <option value="mining">Mining</option>
+              <option value="agriculture">Agriculture</option>
+            </select>
+          </div>
+
           <div style={{ marginBottom: 20 }}>
             <label style={{ display: "block", color: C.muted, fontSize: 11, fontWeight: 600, letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 6 }}>Project Name</label>
             <input value={projectName} onChange={(e) => setProjectName(e.target.value)} required

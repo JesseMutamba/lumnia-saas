@@ -78,7 +78,7 @@ export default function Dashboard() {
 
   // Route to the right dashboard based on data type
   if (activeProject.data?.type === "generic") {
-    return <DynamicDashboard data={activeProject.data} {...sharedProps} />;
+    return <DynamicDashboard data={activeProject.data} sector={activeProject.sector} {...sharedProps} />;
   }
 
   return (
