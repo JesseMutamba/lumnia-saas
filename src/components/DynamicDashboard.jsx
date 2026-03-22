@@ -199,16 +199,22 @@ function buildForecast(tsData, numCols, periods, factors) {
 // ── Insight card skeleton ─────────────────────────────────────────────────────
 function InsightSkeleton({ accent }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginBottom: 20 }}>
-      {[0, 1, 2].map((i) => (
-        <div key={i} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 20px", position: "relative", overflow: "hidden" }}>
-          <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: `${accent}40` }} />
-          <div style={{ width: "55%", height: 11, background: C.panel2, borderRadius: 4, marginBottom: 10, animation: "lm-pulse 1.4s ease-in-out infinite" }} />
-          <div style={{ width: "100%", height: 8, background: C.panel2, borderRadius: 4, marginBottom: 5, animation: "lm-pulse 1.4s ease-in-out infinite 0.1s" }} />
-          <div style={{ width: "85%", height: 8, background: C.panel2, borderRadius: 4, marginBottom: 14, animation: "lm-pulse 1.4s ease-in-out infinite 0.2s" }} />
-          <div style={{ width: "75%", height: 8, background: C.panel2, borderRadius: 4, animation: "lm-pulse 1.4s ease-in-out infinite 0.3s" }} />
-        </div>
-      ))}
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 14px", background: `${accent}0D`, border: `1px solid ${accent}30`, borderRadius: 8 }}>
+        <div style={{ width: 7, height: 7, borderRadius: "50%", background: accent, animation: "lm-pulse 1.2s ease-in-out infinite" }} />
+        <span style={{ color: accent, fontSize: 12, fontWeight: 600 }}>Generating AI insights — the analysis server may take up to 60 s to wake up on first use…</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
+        {[0, 1, 2].map((i) => (
+          <div key={i} style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 10, padding: "16px 20px", position: "relative", overflow: "hidden" }}>
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: `${accent}40` }} />
+            <div style={{ width: "55%", height: 11, background: C.panel2, borderRadius: 4, marginBottom: 10, animation: "lm-pulse 1.4s ease-in-out infinite" }} />
+            <div style={{ width: "100%", height: 8, background: C.panel2, borderRadius: 4, marginBottom: 5, animation: "lm-pulse 1.4s ease-in-out infinite 0.1s" }} />
+            <div style={{ width: "85%", height: 8, background: C.panel2, borderRadius: 4, marginBottom: 14, animation: "lm-pulse 1.4s ease-in-out infinite 0.2s" }} />
+            <div style={{ width: "75%", height: 8, background: C.panel2, borderRadius: 4, animation: "lm-pulse 1.4s ease-in-out infinite 0.3s" }} />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
