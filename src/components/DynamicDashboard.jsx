@@ -198,12 +198,14 @@ function buildForecast(tsData, numCols, periods, factors) {
 }
 
 // ── Insight card skeleton ─────────────────────────────────────────────────────
-function InsightSkeleton({ accent }) {
+function InsightSkeleton({ accent, statusMessage }) {
   return (
     <div style={{ marginBottom: 20 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "8px 14px", background: `${accent}0D`, border: `1px solid ${accent}30`, borderRadius: 8 }}>
         <div style={{ width: 7, height: 7, borderRadius: "50%", background: accent, animation: "lm-pulse 1.2s ease-in-out infinite" }} />
-        <span style={{ color: accent, fontSize: 12, fontWeight: 600 }}>Generating AI insights — the analysis server may take up to 60 s to wake up on first use…</span>
+        <span style={{ color: accent, fontSize: 12, fontWeight: 600, animation: "lm-pulse 1.2s ease-in-out infinite" }}>
+          {statusMessage || "Loading…"}
+        </span>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
         {[0, 1, 2].map((i) => (
@@ -241,7 +243,7 @@ function InsightCards({ cards, accent }) {
 }
 
 // ── Overview tab ──────────────────────────────────────────────────────────────
-function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData, accent, kpiMappings, insightCards, insightsLoading, sector }) {
+function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData, accent, kpiMappings, insightCards, insightStatus, insightError, sector }) {
   const primaryCol  = numCols[0];
   const secondaryCol = numCols[1];
 
@@ -303,8 +305,14 @@ function OverviewTab({ headers, rows, cols, dateCols, numCols, catCols, tsData, 
       </div>
 
       {/* AI insight cards */}
-      {insightsLoading && <InsightSkeleton accent={accent} />}
-      {!insightsLoading && <InsightCards cards={insightCards} accent={accent} />}
+      {insightStatus && <InsightSkeleton accent={accent} statusMessage={insightStatus} />}
+      {!insightStatus && insightError && insightCards.length === 0 && (
+        <div style={{ marginBottom: 20, border: `1px solid ${C.amber}55`, borderRadius: 10, padding: "16px 20px", background: `${C.amber}08` }}>
+          <p style={{ color: C.gold, fontSize: 12, fontWeight: 700, margin: "0 0 6px" }}>Insights Unavailable</p>
+          <p style={{ color: C.muted, fontSize: 12, margin: 0, lineHeight: 1.5 }}>We could not generate AI insights for this dataset. Check your connection or try re-uploading.</p>
+        </div>
+      )}
+      {!insightStatus && <InsightCards cards={insightCards} accent={accent} />}
 
       <div style={{ display: "grid", gridTemplateColumns: "3fr 2fr", gap: 16, marginBottom: 16 }}>
         {/* Primary trend chart */}
@@ -678,9 +686,11 @@ export default function DynamicDashboard({
   const accent      = sectorCfg?.accentColor || C.forest;
   const kpiMappings = sectorCfg?.kpiMappings || [];
 
-  const [insightCards, setInsightCards]     = useState([]);
-  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [insightCards, setInsightCards] = useState([]);
+  const [insightStatus, setInsightStatus] = useState("");   // loading message
+  const [insightError, setInsightError]   = useState(false);
   const generatedKeyRef = useRef(null);
+  const statusTimerRef  = useRef(null);
 
   const cols     = useMemo(() => analyzeColumns(headers, rows), [headers, rows]);
   const dateCols = useMemo(() => headers.filter((h) => cols[h]?.type === "date"), [headers, cols]);
@@ -702,12 +712,21 @@ export default function DynamicDashboard({
     generatedKeyRef.current = dataKey;
 
     setInsightCards([]);
-    setInsightsLoading(true);
+    setInsightError(false);
+
+    // Cycle through staged loading messages every 2 s
+    const STAGES = ["Waking up AI engine...", "Analyzing your data...", "Generating insights...", "Almost ready..."];
+    let stageIdx = 0;
+    setInsightStatus(STAGES[0]);
+    statusTimerRef.current = setInterval(() => {
+      stageIdx = Math.min(stageIdx + 1, STAGES.length - 1);
+      setInsightStatus(STAGES[stageIdx]);
+    }, 2000);
 
     (async () => {
       try {
         // Step 1: call /api/explain (SHAP). Needs ≥2 numeric cols: features + target.
-        const targetCol  = numCols[0];
+        const targetCol   = numCols[0];
         const featureCols = numCols.slice(1, 7); // up to 6 features
         let shapContext = "";
 
@@ -718,7 +737,7 @@ export default function DynamicDashboard({
               headers: { "Content-Type": "application/json" },
               signal: AbortSignal.timeout(20000),
               body: JSON.stringify({
-                data: rows.slice(0, 150).map((r) => {
+                data: rows.slice(0, 500).map((r) => {   // FIX 2: increased from 150
                   const out = {};
                   [...featureCols, targetCol].forEach((c) => { out[c] = toNum(r[c]) ?? 0; });
                   return out;
@@ -767,11 +786,15 @@ export default function DynamicDashboard({
         if (Array.isArray(payload.cards)) setInsightCards(payload.cards);
       } catch (err) {
         console.warn("Insight generation failed:", err.message);
+        setInsightError(true);
       } finally {
-        setInsightsLoading(false);
+        clearInterval(statusTimerRef.current);
+        setInsightStatus("");
       }
     })();
-  }, [data]); // re-run when the project dataset changes
+
+    return () => clearInterval(statusTimerRef.current);
+  }, [rows.length, headers.join(",")]); // FIX 3: precise dependency to avoid stale closure bugs
 
   const tabs = [
     { id: "overview",     label: "Overview" },
@@ -884,7 +907,7 @@ export default function DynamicDashboard({
           ))}
         </div>
 
-        {tab === "overview"      && <OverviewTab      headers={headers} rows={rows} cols={cols} dateCols={dateCols} numCols={numCols} catCols={catCols} tsData={tsData} accent={accent} kpiMappings={kpiMappings} insightCards={insightCards} insightsLoading={insightsLoading} sector={sector} />}
+        {tab === "overview"      && <OverviewTab      headers={headers} rows={rows} cols={cols} dateCols={dateCols} numCols={numCols} catCols={catCols} tsData={tsData} accent={accent} kpiMappings={kpiMappings} insightCards={insightCards} insightStatus={insightStatus} insightError={insightError} sector={sector} />}
         {tab === "scenarios"     && <ScenariosTab     tsData={tsData} numCols={numCols} accent={accent} />}
         {tab === "distribution"  && <DistributionTab  headers={headers} rows={rows} cols={cols} numCols={numCols} catCols={catCols} />}
         {tab === "data"          && <DataTableTab     headers={headers} rows={rows} cols={cols} accent={accent} />}
